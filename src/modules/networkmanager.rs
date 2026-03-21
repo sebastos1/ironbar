@@ -153,24 +153,19 @@ impl Module<GtkBox> for NetworkManagerModule {
 
             let widget = widget.clone();
             glib::spawn_future_local(async move {
+                let picture = widget.downcast_ref::<Picture>().expect("should be Picture");
                 let success = image_provider
-                    .load_into_picture(
-                        &icon_name,
-                        icon_size,
-                        false,
-                        widget.downcast_ref::<Picture>().expect("should be Picture"),
-                    )
+                    .load_into_picture(&icon_name, icon_size, false, picture)
                     .await
                     .unwrap_or(false);
 
                 if !success {
-                    // swap picture for a label
-                    let parent = widget.parent().expect("should have parent");
-                    let parent = parent.downcast_ref::<gtk::Box>().expect("should be box");
-                    parent.remove(&widget);
-                    let label = Label::new(Some(&icon_name));
-                    label.add_css_class("icon");
-                    parent.append(&label);
+                    if let Some(parent) = widget.parent().and_then(|p| p.downcast::<gtk::Box>().ok()) {
+                        parent.remove(&widget);
+                        let label = Label::new(Some(&icon_name));
+                        label.add_css_class("icon");
+                        parent.append(&label);
+                    }
                 }
 
                 widget.set_visible(true);

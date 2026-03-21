@@ -8,6 +8,7 @@ use crate::image::Provider;
 use crate::modules::{Module, ModuleInfo, ModuleParts, WidgetContext};
 use crate::{module_impl, spawn};
 
+use gtk::Label;
 use color_eyre::Result;
 use gtk::prelude::WidgetExt;
 use gtk::prelude::*;
@@ -150,16 +151,29 @@ impl Module<GtkBox> for NetworkManagerModule {
                 return;
             }
 
+            let widget = widget.clone();
             glib::spawn_future_local(async move {
-                image_provider
-                    .load_into_picture_silent(
+                let success = image_provider
+                    .load_into_picture(
                         &icon_name,
                         icon_size,
                         false,
                         widget.downcast_ref::<Picture>().expect("should be Picture"),
                     )
-                    .await;
-                widget.set_visible(true)
+                    .await
+                    .unwrap_or(false);
+
+                if !success {
+                    // swap picture for a label
+                    let parent = widget.parent().expect("should have parent");
+                    let parent = parent.downcast_ref::<gtk::Box>().expect("should be box");
+                    parent.remove(&widget);
+                    let label = Label::new(Some(&icon_name));
+                    label.add_css_class("icon");
+                    parent.append(&label);
+                }
+
+                widget.set_visible(true);
             });
         });
 

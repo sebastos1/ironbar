@@ -97,11 +97,17 @@ fn get_image_from_pixmap(item: Option<&[IconPixmap]>, size: u32) -> Result<Pictu
         row_stride,
     );
 
-    let texture = Texture::for_pixbuf(&pixbuf).scale(size as f64, size as f64);
+    let scaled = pixbuf.scale_simple(
+        size as i32,
+        size as i32,
+        gtk::gdk_pixbuf::InterpType::Bilinear,
+    );
+
+    let texture = Texture::for_pixbuf(scaled.as_ref().unwrap_or(&pixbuf));
 
     let picture = Picture::new();
     picture.set_content_fit(ContentFit::ScaleDown);
-    picture.set_paintable(texture.as_ref());
+    picture.set_paintable(Some(&texture));
 
     Ok(picture)
 }

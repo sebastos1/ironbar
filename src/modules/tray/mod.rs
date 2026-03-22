@@ -153,6 +153,9 @@ pub struct TrayModule {
     /// **Default**: `16`
     icon_size: u32,
 
+    /// Hide the tray fully when there are no items
+    hide_when_empty: bool,
+
     /// The direction in which to pack tray icons.
     ///
     /// **Valid options**: `horizontal`, `vertical`
@@ -174,6 +177,7 @@ impl Default for TrayModule {
         Self {
             prefer_theme_icons: true,
             icon_size: default::IconSize::Tiny as u32,
+            hide_when_empty: false,
             direction: None,
             click_handlers: TrayClickHandlers::default(),
             common: Some(CommonConfig::default()),
@@ -279,6 +283,11 @@ impl Module<gtk::Box> for TrayModule {
         // as the latter has issues on Sway with menus focus-stealing from the bar.
         let container = gtk::Box::new(orientation, 0);
 
+        // starts empty, populated by events
+        if self.hide_when_empty {
+            container.set_visible(false);
+        }
+
         {
             let container = container.clone();
             let mut menus = HashMap::new();
@@ -302,6 +311,7 @@ impl Module<gtk::Box> for TrayModule {
                     &icon_config,
                     &activated_channel,
                     &click_handlers,
+                    self.hide_when_empty,
                 );
             });
         };
@@ -334,6 +344,7 @@ fn on_update(
     icon_config: &IconConfig,
     activated_channel: &mpsc::Sender<UiEvent>,
     click_handlers: &TrayClickHandlers,
+    hide_when_empty: bool,
 ) {
     match update {
         Event::Add(address, item) => {
@@ -425,9 +436,13 @@ fn on_update(
         Event::Remove(address) => {
             debug!("Removing tray item at '{address}'");
 
-            if let Some(menu) = menus.get(address.as_str()) {
+            if let Some(menu) = menus.remove(address.as_str()) {
                 container.remove(&menu.widget);
             }
         }
+    }
+
+    if hide_when_empty {
+        container.set_visible(!menus.is_empty());
     }
 }

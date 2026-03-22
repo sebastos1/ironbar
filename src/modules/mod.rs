@@ -67,6 +67,8 @@ pub mod volume;
 #[cfg(feature = "workspaces")]
 pub mod workspaces;
 
+pub mod niri_workspaces;
+
 #[derive(Clone)]
 pub enum ModuleLocation {
     Left,

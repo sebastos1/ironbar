@@ -28,6 +28,7 @@ pub mod lua;
 pub mod music;
 #[cfg(feature = "network_manager")]
 pub mod networkmanager;
+pub mod niri;
 pub mod outputs;
 #[cfg(feature = "sway")]
 pub mod sway;
@@ -85,6 +86,7 @@ pub struct Clients {
     volume: Option<Arc<volume::Client>>,
     #[cfg(feature = "bluetooth")]
     bluetooth: Option<Arc<bluetooth::Client>>,
+    niri: Option<Arc<niri::Client>>,
 }
 
 pub type ClientResult<T> = Result<Arc<T>>;
@@ -92,6 +94,12 @@ pub type ClientResult<T> = Result<Arc<T>>;
 impl Clients {
     pub(crate) fn new() -> Self {
         Self::default()
+    }
+
+    pub fn niri(&mut self) -> Arc<niri::Client> {
+        self.niri
+            .get_or_insert_with(|| Arc::new(niri::Client::new()))
+            .clone()
     }
 
     pub fn wayland(&mut self) -> Arc<wayland::Client> {

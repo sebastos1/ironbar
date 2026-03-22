@@ -51,6 +51,8 @@ use crate::modules::volume::VolumeModule;
 #[cfg(feature = "workspaces")]
 use crate::modules::workspaces::WorkspacesModule;
 
+use crate::modules::niri_workspaces::NiriWorkspacesModule;
+
 pub use self::common::{CommonConfig, ModuleJustification, ModuleOrientation, TransitionType};
 pub use self::layout::LayoutConfig;
 pub use self::marquee::{MarqueeMode, MarqueeOnHover};
@@ -158,6 +160,7 @@ pub enum ModuleConfig {
     Volume(Box<VolumeModule>),
     #[cfg(feature = "workspaces")]
     Workspaces(Box<WorkspacesModule>),
+    NiriWorkspaces(Box<NiriWorkspacesModule>),
 }
 
 impl ModuleConfig {
@@ -218,6 +221,7 @@ impl ModuleConfig {
             Self::Volume(module) => create!(module),
             #[cfg(feature = "workspaces")]
             Self::Workspaces(module) => create!(module),
+            Self::NiriWorkspaces(module) => create!(module),
         }
     }
 
@@ -265,6 +269,7 @@ impl ModuleConfig {
             ModuleConfig::Volume(_) => "Volume",
             #[cfg(feature = "workspaces")]
             ModuleConfig::Workspaces(_) => "Workspaces",
+            ModuleConfig::NiriWorkspaces(_) => "NiriWorkspaces",
             // in case no modules are compiled
             #[allow(unreachable_patterns)]
             _ => "",

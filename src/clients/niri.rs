@@ -1,4 +1,3 @@
-use crate::await_sync;
 use crate::spawn;
 use niri_ipc::{Event, Request, Window, Workspace};
 use std::collections::BTreeMap;
@@ -98,32 +97,9 @@ impl Client {
             let mut my_workspaces: BTreeMap<u64, Workspace> = BTreeMap::new();
             let mut my_windows: BTreeMap<u64, WindowInfo> = BTreeMap::new();
 
-            let build_update =
-                |workspaces: &BTreeMap<u64, Workspace>, windows: &BTreeMap<u64, WindowInfo>| {
-                    let mut ws_list: Vec<WorkspaceInfo> = workspaces
-                        .values()
-                        .map(|ws| WorkspaceInfo {
-                            id: ws.id,
-                            idx: ws.idx,
-                            name: ws.name.clone().unwrap_or_else(|| ws.idx.to_string()),
-                            output: ws.output.clone().unwrap_or_default(),
-                            is_active: ws.is_active,
-                            is_focused: ws.is_focused,
-                        })
-                        .collect();
-                    ws_list.sort_by_key(|w| (w.output.clone(), w.idx));
-
-                    NiriUpdate {
-                        workspaces: ws_list,
-                        windows: windows.values().cloned().collect(),
-                    }
-                };
-
             loop {
                 buf.clear();
-                await_sync(async {
-                    reader.read_line(&mut buf).await.unwrap_or(0);
-                });
+                reader.read_line(&mut buf).await.unwrap_or(0);
                 let event: Event = match serde_json::from_str(&buf) {
                     Ok(ev) => ev,
                     Err(e) => {
@@ -237,5 +213,27 @@ impl Client {
                 error!("niri IPC error: {e}");
             }
         });
+    }
+}
+
+fn build_update(
+    workspaces: &BTreeMap<u64, Workspace>,
+    windows: &BTreeMap<u64, WindowInfo>,
+) -> NiriUpdate {
+    let mut ws_list: Vec<WorkspaceInfo> = workspaces
+        .values()
+        .map(|ws| WorkspaceInfo {
+            id: ws.id,
+            idx: ws.idx,
+            name: ws.name.clone().unwrap_or_else(|| ws.idx.to_string()),
+            output: ws.output.clone().unwrap_or_default(),
+            is_active: ws.is_active,
+            is_focused: ws.is_focused,
+        })
+        .collect();
+    ws_list.sort_by_key(|w| (w.output.clone(), w.idx));
+    NiriUpdate {
+        workspaces: ws_list,
+        windows: windows.values().cloned().collect(),
     }
 }

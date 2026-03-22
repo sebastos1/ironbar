@@ -17,11 +17,6 @@ use tokio::sync::mpsc;
 
 register_client!(crate::clients::niri::Client, niri);
 
-pub enum UiEvent {
-    FocusWorkspace(u64),
-    FocusWindow(u64),
-}
-
 struct WorkspaceButton {
     button: gtk::Button,
     /// For the popups. probably some better way to get the windows
@@ -48,7 +43,7 @@ impl Default for NiriWorkspacesModule {
 
 impl Module<gtk::Box> for NiriWorkspacesModule {
     type SendMessage = NiriUpdate;
-    type ReceiveMessage = UiEvent;
+    type ReceiveMessage = NiriAction;
 
     module_impl!("niri_workspaces");
 
@@ -91,11 +86,7 @@ impl Module<gtk::Box> for NiriWorkspacesModule {
         // handle interactions from the bar
         spawn(async move {
             while let Some(event) = rx.recv().await {
-                let action = match event {
-                    UiEvent::FocusWorkspace(id) => NiriAction::FocusWorkspace(id),
-                    UiEvent::FocusWindow(id) => NiriAction::FocusWindow(id),
-                };
-                client.dispatch(action).await;
+                client.dispatch(event).await;
             }
         });
 
@@ -153,8 +144,10 @@ fn on_update(
     tx: &mpsc::Sender<ModuleUpdateEvent<NiriUpdate>>,
     buttons: &Rc<RefCell<BTreeMap<u64, WorkspaceButton>>>,
     popup_container: &gtk::Box,
+
+    // static garbage
     image_provider: &crate::image::Provider,
-    controller_tx: &mpsc::Sender<UiEvent>,
+    controller_tx: &mpsc::Sender<NiriAction>,
     icon_size: i32,
 ) {
     // current visible workspaces
@@ -217,7 +210,7 @@ fn on_update(
 
 fn new_workspace_button(
     workspace: &WorkspaceInfo,
-    controller_tx: &mpsc::Sender<UiEvent>,
+    controller_tx: &mpsc::Sender<NiriAction>,
     tx: &mpsc::Sender<ModuleUpdateEvent<NiriUpdate>>,
     popup_container: &gtk::Box,
 ) -> WorkspaceButton {
@@ -229,7 +222,7 @@ fn new_workspace_button(
     let id = workspace.id;
     button.connect_pressed(MouseButton::Primary, {
         let controller_tx = controller_tx.clone();
-        move || controller_tx.send_spawn(UiEvent::FocusWorkspace(id))
+        move || controller_tx.send_spawn(NiriAction::FocusWorkspace(id))
     });
 
     // right click opens the popup
@@ -254,7 +247,7 @@ fn new_workspace_button(
                 let id = win.id;
                 label.connect_pressed(MouseButton::Primary, {
                     let controller_tx = controller_tx.clone();
-                    move || controller_tx.send_spawn(UiEvent::FocusWindow(id))
+                    move || controller_tx.send_spawn(NiriAction::FocusWindow(id))
                 });
                 popup_container.append(&label);
             }
@@ -270,7 +263,7 @@ fn build_workspace_box(
     workspace: &WorkspaceInfo,
     windows: &[WindowInfo],
     image_provider: &crate::image::Provider,
-    controller_tx: &mpsc::Sender<UiEvent>,
+    controller_tx: &mpsc::Sender<NiriAction>,
     icon_size: i32,
 ) -> gtk::Box {
     let ws_box = gtk::Box::new(Orientation::Horizontal, 0);
@@ -306,7 +299,7 @@ fn build_workspace_box(
         let id = window.id;
         window_box.connect_pressed(MouseButton::Primary, {
             let controller_tx = controller_tx.clone();
-            move || controller_tx.send_spawn(UiEvent::FocusWindow(id))
+            move || controller_tx.send_spawn(NiriAction::FocusWindow(id))
         });
 
         window_box.append(&picture);

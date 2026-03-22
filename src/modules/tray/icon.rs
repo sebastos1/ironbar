@@ -1,4 +1,3 @@
-use crate::gtk_helpers::IronbarPaintableExt;
 use crate::modules::tray::interface::TrayMenu;
 use color_eyre::{Report, Result};
 use gtk::gdk::Texture;

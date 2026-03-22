@@ -1,8 +1,24 @@
+use crate::await_sync;
 use crate::spawn;
-use niri_ipc::{Event, Request, Window, Workspace, socket::Socket};
+use niri_ipc::{Event, Request, Window, Workspace};
 use std::collections::BTreeMap;
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::net::UnixStream;
 use tokio::sync::broadcast;
 use tracing::error;
+
+async fn connect() -> std::io::Result<UnixStream> {
+    let socket_path = std::env::var_os("NIRI_SOCKET").ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "NIRI_SOCKET not found")
+    })?;
+    UnixStream::connect(socket_path).await
+}
+
+async fn send_request(stream: &mut UnixStream, request: &Request) -> std::io::Result<()> {
+    let buf = serde_json::to_string(request)?;
+    stream.write_all(buf.as_bytes()).await?;
+    stream.shutdown().await
+}
 
 #[derive(Debug, Clone)]
 pub struct WindowInfo {
@@ -35,12 +51,12 @@ pub struct WorkspaceInfo {
     pub output: String,
     pub is_active: bool,
     pub is_focused: bool,
-    pub windows: Vec<WindowInfo>,
 }
 
 #[derive(Debug, Clone)]
 pub struct NiriUpdate {
     pub workspaces: Vec<WorkspaceInfo>,
+    pub windows: Vec<WindowInfo>,
 }
 
 #[derive(Debug)]
@@ -61,56 +77,58 @@ impl Client {
 
         let tx2 = tx.clone();
         spawn(async move {
-            let Ok(mut socket) =
-                Socket::connect().inspect_err(|e| error!("could not connect to niri socket: {e}"))
-            else {
-                return;
-            };
-
-            match socket.send(Request::EventStream) {
-                Ok(Ok(niri_ipc::Response::Handled)) => {}
-                other => {
-                    error!("unexpected reply to EventStream: {other:?}");
+            let mut stream = match connect().await {
+                Ok(s) => s,
+                Err(e) => {
+                    error!("could not connect to niri socket: {e}");
                     return;
                 }
+            };
+
+            if let Err(e) = send_request(&mut stream, &Request::EventStream).await {
+                error!("niri EventStream error: {e}");
+                return;
             }
+
+            // read and discard the initial reply line
+            let mut buf = String::new();
+            let mut reader = BufReader::new(stream);
+            reader.read_line(&mut buf).await.ok();
 
             let mut my_workspaces: BTreeMap<u64, Workspace> = BTreeMap::new();
             let mut my_windows: BTreeMap<u64, WindowInfo> = BTreeMap::new();
 
-            let build_workspaces =
+            let build_update =
                 |workspaces: &BTreeMap<u64, Workspace>, windows: &BTreeMap<u64, WindowInfo>| {
                     let mut ws_list: Vec<WorkspaceInfo> = workspaces
                         .values()
-                        .map(|ws| {
-                            let mut wins: Vec<WindowInfo> = windows
-                                .values()
-                                .filter(|w| w.workspace_id == Some(ws.id))
-                                .cloned()
-                                .collect();
-                            wins.sort_by_key(|w| w.layout_pos);
-                            WorkspaceInfo {
-                                id: ws.id,
-                                idx: ws.idx,
-                                name: ws.name.clone().unwrap_or_else(|| ws.idx.to_string()),
-                                output: ws.output.clone().unwrap_or_default(),
-                                is_active: ws.is_active,
-                                is_focused: ws.is_focused,
-                                windows: wins,
-                            }
+                        .map(|ws| WorkspaceInfo {
+                            id: ws.id,
+                            idx: ws.idx,
+                            name: ws.name.clone().unwrap_or_else(|| ws.idx.to_string()),
+                            output: ws.output.clone().unwrap_or_default(),
+                            is_active: ws.is_active,
+                            is_focused: ws.is_focused,
                         })
                         .collect();
                     ws_list.sort_by_key(|w| (w.output.clone(), w.idx));
-                    ws_list
+
+                    NiriUpdate {
+                        workspaces: ws_list,
+                        windows: windows.values().cloned().collect(),
+                    }
                 };
 
-            let mut next_event = socket.read_events();
             loop {
-                let event = match next_event() {
+                buf.clear();
+                await_sync(async {
+                    reader.read_line(&mut buf).await.unwrap_or(0);
+                });
+                let event: Event = match serde_json::from_str(&buf) {
                     Ok(ev) => ev,
-                    Err(err) => {
-                        error!("niri IPC error: {err}");
-                        break;
+                    Err(e) => {
+                        error!("niri IPC parse error: {e}");
+                        continue;
                     }
                 };
 
@@ -119,36 +137,53 @@ impl Client {
                         my_workspaces = workspaces.into_iter().map(|w| (w.id, w)).collect();
                     }
                     Event::WorkspaceActivated { id, focused } => {
-                        error!("focusing workspace: {id}");
                         let output = my_workspaces
                             .get(&id)
                             .and_then(|ws| ws.output.clone())
                             .unwrap_or_default();
-                        my_workspaces.values_mut().for_each(|w| {
-                            if w.id == id {
-                                w.is_active = true;
-                                w.is_focused = focused;
-                            } else {
-                                if focused {
+                        if let Some(ws) = my_workspaces.get_mut(&id) {
+                            ws.is_active = true;
+                            ws.is_focused = focused;
+                        }
+                        if focused {
+                            my_workspaces
+                                .values_mut()
+                                .filter(|w| w.id != id)
+                                .for_each(|w| {
                                     w.is_focused = false;
-                                }
-                                if w.output.as_deref() == Some(output.as_str()) {
-                                    w.is_active = false;
-                                }
-                            }
-                        });
+                                    if w.output.as_deref() == Some(output.as_str()) {
+                                        w.is_active = false;
+                                    }
+                                });
+                        } else {
+                            my_workspaces
+                                .values_mut()
+                                .filter(|w| {
+                                    w.id != id && w.output.as_deref() == Some(output.as_str())
+                                })
+                                .for_each(|w| w.is_active = false);
+                        }
                     }
                     Event::WindowsChanged { windows } => {
+                        let focused_id = my_windows.values().find(|w| w.is_focused).map(|w| w.id);
                         my_windows = windows
                             .into_iter()
                             .map(|w| (w.id, WindowInfo::from(w)))
                             .collect();
+                        if let Some(id) = focused_id {
+                            if let Some(w) = my_windows.get_mut(&id) {
+                                w.is_focused = true;
+                            }
+                        }
                     }
                     Event::WindowOpenedOrChanged { window } => {
-                        if window.is_focused {
-                            my_windows.values_mut().for_each(|w| w.is_focused = false);
-                        }
-                        my_windows.insert(window.id, WindowInfo::from(window));
+                        let was_focused = my_windows
+                            .get(&window.id)
+                            .map(|w| w.is_focused)
+                            .unwrap_or(false);
+                        let mut info = WindowInfo::from(window);
+                        info.is_focused = was_focused;
+                        my_windows.insert(info.id, info);
                     }
                     Event::WindowClosed { id } => {
                         my_windows.remove(&id);
@@ -160,17 +195,15 @@ impl Client {
                     }
                     Event::WindowLayoutsChanged { changes } => {
                         for (id, layout) in changes {
-                            if let Some(win) = my_windows.get_mut(&id) {
-                                win.layout_pos = layout.pos_in_scrolling_layout.unwrap_or_default();
+                            if let Some(w) = my_windows.get_mut(&id) {
+                                w.layout_pos = layout.pos_in_scrolling_layout.unwrap_or_default();
                             }
                         }
                     }
                     _ => continue,
                 }
 
-                let _ = tx2.send(NiriUpdate {
-                    workspaces: build_workspaces(&my_workspaces, &my_windows),
-                });
+                let _ = tx2.send(build_update(&my_workspaces, &my_windows));
             }
         });
 
@@ -179,5 +212,30 @@ impl Client {
 
     pub fn subscribe(&self) -> broadcast::Receiver<NiriUpdate> {
         self.tx.subscribe()
+    }
+
+    pub async fn dispatch(&self, action: NiriAction) {
+        spawn(async move {
+            let mut stream = match connect().await {
+                Ok(s) => s,
+                Err(e) => {
+                    error!("could not connect to niri socket: {e}");
+                    return;
+                }
+            };
+            let request = match action {
+                NiriAction::FocusWorkspace(id) => {
+                    Request::Action(niri_ipc::Action::FocusWorkspace {
+                        reference: niri_ipc::WorkspaceReferenceArg::Id(id),
+                    })
+                }
+                NiriAction::FocusWindow(id) => {
+                    Request::Action(niri_ipc::Action::FocusWindow { id })
+                }
+            };
+            if let Err(e) = send_request(&mut stream, &request).await {
+                error!("niri IPC error: {e}");
+            }
+        });
     }
 }
